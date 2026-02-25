@@ -104,8 +104,8 @@ def main():
     app = RevenueAccountingApp()
     
     # 配置路径
-    input_dir = r'd:/app/收入核算系统/跨境电商数据/部分店铺收入/亚马逊'
-    output_file = r'd:/app/收入核算系统/output/月度核算报表_Phase1.xlsx'
+    input_dir = r'C:\Users\EDY\Desktop\CB-Settlement\data\部分店铺收入\亚马逊'
+    output_file = r'C:\Users\EDY\Desktop\CB-Settlement\output\月度核算报表_Phase1.xlsx'
     
     app.run(input_dir, output_file)
 

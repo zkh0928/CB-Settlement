@@ -1250,6 +1250,676 @@ class DongFangParser(BaseWarehouseParser):
         return ""
 
 
+class JiuXiParser(BaseWarehouseParser):
+    """久喜仓库解析器 (CN, CNY)
+
+    结算口径：按「计算规则金额」列汇总，按文件名提取月份。
+    """
+
+    def __init__(self):
+        super().__init__("久喜", "JP", "JPY")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析久喜仓库账单文件，提取计算规则金额列并计算总额。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            # 读取第一个工作表
+            sheet_name = xl.sheet_names[0]
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+            if df.empty:
+                return Decimal('0'), {}, 0
+
+            # 寻找计算规则金额列
+            amount_col = None
+            priority_keywords = ['计算规则金额', '计费规则金额', '计费金额', '金额']
+            for kw in priority_keywords:
+                for c in df.columns:
+                    if kw in str(c):
+                        amount_col = c
+                        break
+                if amount_col is not None:
+                    break
+
+            if amount_col is None:
+                return Decimal('0'), {}, 0
+
+            # 计算总金额和记录数
+            total = Decimal('0')
+            count = 0
+            for _, row in df.iterrows():
+                val = row.get(amount_col, 0)
+                if pd.isna(val):
+                    continue
+                try:
+                    amt = Decimal(str(val))
+                    total += amt
+                    count += 1
+                except Exception:
+                    continue
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            breakdown = {'计算规则金额': total}
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  久喜解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从久喜仓库文件名中提取月份信息。
+        支持格式：
+        - 2026-01-04_CostBillExport15585.xlsx
+        """
+        import re
+        
+        # 格式: 2026-01-04_CostBillExport15585.xlsx
+        match = re.search(r'(\d{4})-(\d{2})-(\d{2})', filename)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}"
+            
+        return ""
+
+
+class JinDaParser(BaseWarehouseParser):
+    """津达仓库解析器 (CN, CNY)
+
+    结算口径：按「计算规则金额」列汇总，按文件名提取月份。
+    """
+
+    def __init__(self):
+        super().__init__("津达", "DE", "EUR")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析津达仓库账单文件，提取计算规则金额列并计算总额。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            # 读取第一个工作表
+            sheet_name = xl.sheet_names[0]
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+            if df.empty:
+                return Decimal('0'), {}, 0
+
+            # 寻找计算规则金额列
+            amount_col = None
+            priority_keywords = ['计算规则金额', '计费规则金额', '计费金额', '金额']
+            for kw in priority_keywords:
+                for c in df.columns:
+                    if kw in str(c):
+                        amount_col = c
+                        break
+                if amount_col is not None:
+                    break
+
+            if amount_col is None:
+                return Decimal('0'), {}, 0
+
+            # 计算总金额和记录数
+            total = Decimal('0')
+            count = 0
+            for _, row in df.iterrows():
+                val = row.get(amount_col, 0)
+                if pd.isna(val):
+                    continue
+                try:
+                    amt = Decimal(str(val))
+                    total += amt
+                    count += 1
+                except Exception:
+                    continue
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            breakdown = {'计算规则金额': total}
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  津达解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从津达仓库文件名中提取月份信息。
+        支持格式：
+        - 2025-12-31_CostBillExport29779.xlsx
+        """
+        import re
+        
+        # 格式: 2025-12-31_CostBillExport29779.xlsx
+        match = re.search(r'(\d{4})-(\d{2})-(\d{2})', filename)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}"
+            
+        return ""
+
+
+class KuLuParser(BaseWarehouseParser):
+    """酷麓仓库解析器 (US, USD)
+
+    结算口径：按「计算规则金额」列汇总，按文件名提取月份。
+    """
+
+    def __init__(self):
+        super().__init__("酷麓", "US", "USD")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析酷麓仓库账单文件，提取计算规则金额列并计算总额。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            # 读取第一个工作表
+            sheet_name = xl.sheet_names[0]
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+            if df.empty:
+                return Decimal('0'), {}, 0
+
+            # 寻找计算规则金额列
+            amount_col = None
+            priority_keywords = ['计算规则金额', '计费规则金额', '计费金额', '金额']
+            for kw in priority_keywords:
+                for c in df.columns:
+                    if kw in str(c):
+                        amount_col = c
+                        break
+                if amount_col is not None:
+                    break
+
+            if amount_col is None:
+                return Decimal('0'), {}, 0
+
+            # 计算总金额和记录数
+            total = Decimal('0')
+            count = 0
+            for _, row in df.iterrows():
+                val = row.get(amount_col, 0)
+                if pd.isna(val):
+                    continue
+                try:
+                    amt = Decimal(str(val))
+                    total += amt
+                    count += 1
+                except Exception:
+                    continue
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            breakdown = {'计算规则金额': total}
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  酷麓解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从酷麓仓库文件名中提取月份信息。
+        支持格式：
+        - 2026-01-04_CostBillExport10457.xlsx
+        """
+        import re
+        
+        # 格式: 2026-01-04_CostBillExport10457.xlsx
+        match = re.search(r'(\d{4})-(\d{2})-(\d{2})', filename)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}"
+            
+        return ""
+
+
+class XiYouParser(BaseWarehouseParser):
+    """西邮仓库解析器
+
+    结算口径：从汇总工作表提取费用合计(Total Fee)，从账单国家(Country)获取地区，从费用开始/结束日期获取月份。
+    """
+
+    def __init__(self):
+        super().__init__("西邮", "US", "USD")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析西邮仓库账单文件，从汇总工作表提取费用合计。
+        处理费用合计(Total Fee)列隔一个或两个单元格就是金额数目的格式。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            # 读取汇总工作表（假设是第一个工作表）
+            sheet_name = xl.sheet_names[0]
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+            if df.empty:
+                return Decimal('0'), {}, 0
+
+            # 寻找费用合计(Total Fee)所在的单元格
+            total = Decimal('0')
+            count = 0
+            
+            # 遍历所有单元格，寻找费用合计标记
+            for i, row in df.iterrows():
+                for j, cell in enumerate(row):
+                    cell_str = str(cell).strip()
+                    if 'total fee' in cell_str.lower() or '费用合计' in cell_str:
+                        # 尝试不同的偏移量寻找金额：优先隔两个单元格，然后隔一个，最后直接相邻
+                        for offset in [3, 2, 1]:  # 偏移量3:隔两个, 2:隔一个, 1:直接相邻
+                            if j + offset < len(row):  # 确保索引不越界
+                                amount_cell = row.iloc[j + offset]
+                                if not pd.isna(amount_cell):
+                                    try:
+                                        amt = Decimal(str(amount_cell))
+                                        total += amt
+                                        count += 1
+                                        break  # 找到有效金额后停止尝试其他偏移量
+                                    except Exception:
+                                        continue
+                        break
+                if count > 0:
+                    break
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            breakdown = {'费用合计': total}
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  西邮解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从西邮仓库文件名中提取月份信息。
+        支持格式：
+        - AAB57--US--TEMU--西邮物流仓储账单--2025-06-01-2025-06-30--初版.xlsx
+        - AAB57--US--TEMU--西邮物流仓储账单--2025.07.01-2025.07.31--初版.xlsx
+        """
+        import re
+        
+        # 格式1: 2025-06-01-2025-06-30
+        match1 = re.search(r'(\d{4})[-\.](\d{2})[-\.]\d{2}[-\.](\d{4})[-\.](\d{2})[-\.]\d{2}', filename)
+        if match1:
+            # 取开始日期的月份
+            return f"{match1.group(1)}-{match1.group(2)}"
+            
+        return ""
+
+
+class TLBParser(BaseWarehouseParser):
+    """TLB账单仓库解析器 (UK, GBP)
+
+    结算口径：从Total Due获取金额数据，处理H和I列的公式计算。
+    """
+
+    def __init__(self):
+        super().__init__("TLB账单", "UK", "GBP")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析TLB账单仓库文件，从Total Due获取金额数据。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            # 读取第一个工作表
+            sheet_name = xl.sheet_names[0]
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+            if df.empty:
+                return Decimal('0'), {}, 0
+
+            # 寻找Total Due所在的单元格
+            total = Decimal('0')
+            count = 0
+            
+            # 遍历所有单元格，寻找Total Due标记
+            for i, row in df.iterrows():
+                for j, cell in enumerate(row):
+                    cell_str = str(cell).strip()
+                    if 'total due' in cell_str.lower():
+                        # 尝试从当前行的后续单元格获取金额
+                        # 首先尝试直接从当前行的后续单元格获取
+                        for offset in [1, 2, 3]:  # 尝试不同的偏移量
+                            if j + offset < len(row):
+                                amount_cell = row.iloc[j + offset]
+                                if not pd.isna(amount_cell):
+                                    # 处理带货币符号的金额
+                                    amount_str = str(amount_cell).replace('£', '').replace(',', '').strip()
+                                    try:
+                                        amt = Decimal(amount_str)
+                                        total += amt
+                                        count += 1
+                                        break
+                                    except Exception:
+                                        continue
+                        break
+                if count > 0:
+                    break
+
+            # 如果没找到，尝试从H和I列寻找公式计算的结果
+            if count == 0:
+                for i, row in df.iterrows():
+                    # 检查H列和I列
+                    for col_idx in range(len(row)):
+                        cell = row.iloc[col_idx]
+                        if not pd.isna(cell):
+                            cell_str = str(cell).strip()
+                            # 检查是否是金额格式（带£符号）
+                            if cell_str.startswith('£'):
+                                amount_str = cell_str.replace('£', '').replace(',', '').strip()
+                                try:
+                                    amt = Decimal(amount_str)
+                                    total += amt
+                                    count += 1
+                                    break
+                                except Exception:
+                                    continue
+                    if count > 0:
+                        break
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            breakdown = {'Total Due': total}
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  TLB解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从TLB账单文件名中提取月份信息。
+        支持格式：
+        - AC000896 T006 2024年9月对账单.xlsx
+        - AC000913 T006_2024年10月对账单.xlsx
+        """
+        import re
+        
+        # 格式1: 2024年9月
+        match1 = re.search(r'(\d{4})年(\d+)月', filename)
+        if match1:
+            year = match1.group(1)
+            month = match1.group(2).zfill(2)  # 确保月份是两位数
+            return f"{year}-{month}"
+            
+        return ""
+
+
+class YiDaYunParser(BaseWarehouseParser):
+    """易达云仓库解析器 (US, USD)
+
+    结算口径：从账单总消费行获取金额，做绝对值处理。
+    """
+
+    def __init__(self):
+        super().__init__("易达云", "US", "USD")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析易达云仓库账单文件，从账单总消费行获取金额并做绝对值处理。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            # 读取第一个工作表
+            sheet_name = xl.sheet_names[0]
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+
+            if df.empty:
+                return Decimal('0'), {}, 0
+
+            # 寻找账单总消费所在的单元格
+            total = Decimal('0')
+            count = 0
+            
+            # 遍历所有单元格，寻找账单总消费标记
+            for i, row in df.iterrows():
+                for j, cell in enumerate(row):
+                    cell_str = str(cell).strip()
+                    if '账单总消费' in cell_str:
+                        # 尝试从当前行的后续单元格获取金额
+                        for offset in [1, 2, 3]:  # 尝试不同的偏移量
+                            if j + offset < len(row):
+                                amount_cell = row.iloc[j + offset]
+                                if not pd.isna(amount_cell):
+                                    # 处理金额，做绝对值处理
+                                    try:
+                                        amt = Decimal(str(amount_cell))
+                                        amt = abs(amt)  # 绝对值处理
+                                        total += amt
+                                        count += 1
+                                        break
+                                    except Exception:
+                                        continue
+                        break
+                if count > 0:
+                    break
+
+            # 如果没找到，尝试从所有单元格中寻找包含"总消费"的标记
+            if count == 0:
+                for i, row in df.iterrows():
+                    for j, cell in enumerate(row):
+                        cell_str = str(cell).strip()
+                        if '总消费' in cell_str:
+                            # 尝试从当前行的后续单元格获取金额
+                            for offset in [1, 2, 3]:
+                                if j + offset < len(row):
+                                    amount_cell = row.iloc[j + offset]
+                                    if not pd.isna(amount_cell):
+                                        try:
+                                            amt = Decimal(str(amount_cell))
+                                            amt = abs(amt)  # 绝对值处理
+                                            total += amt
+                                            count += 1
+                                            break
+                                        except Exception:
+                                            continue
+                            break
+                    if count > 0:
+                        break
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            breakdown = {'账单总消费': total}
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  易达云解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从易达云仓库文件名中提取月份信息。
+        支持格式：
+        - Z0333-1756833040205.xlsx (时间戳格式)
+        """
+        import re
+        from datetime import datetime
+        
+        # 格式: Z0333-1756833040205.xlsx
+        match = re.search(r'Z0333-(\d+)\.xlsx', filename)
+        if match:
+            timestamp = match.group(1)
+            # 处理时间戳，可能是毫秒或秒
+            if len(timestamp) == 13:
+                # 毫秒时间戳
+                dt = datetime.fromtimestamp(int(timestamp) / 1000)
+            else:
+                # 秒时间戳
+                dt = datetime.fromtimestamp(int(timestamp))
+            return f"{dt.year}-{dt.month:02d}"
+            
+        return ""
+
+
+class YiLingParser(BaseWarehouseParser):
+    """易领仓库解析器
+
+    结算口径：从四个工作表分别提取费用小计并计算总支出。
+    """
+
+    def __init__(self):
+        super().__init__("易领", "US", "USD")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析易领仓库账单文件，从四个工作表分别提取费用小计并计算总支出。
+        """
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return Decimal('0'), {}, 0
+
+            total = Decimal('0')
+            breakdown = {}
+            count = 0
+
+            # 解析入库费用明细工作表 (inbound fee)
+            inbound_total = self._parse_worksheet(xl, 'inbound fee', ['Subtotal', '入库费用小计'])
+            if inbound_total > Decimal('0'):
+                total += inbound_total
+                breakdown['入库费用'] = inbound_total
+                count += 1
+
+            # 解析出库费用明细工作表 (outbound fee)
+            outbound_total = self._parse_worksheet(xl, 'outbound fee', ['Subtotal', '出库费用小计'])
+            if outbound_total > Decimal('0'):
+                total += outbound_total
+                breakdown['出库费用'] = outbound_total
+                count += 1
+
+            # 解析仓租费用工作表 (Storage Charges)
+            storage_total = self._parse_worksheet(xl, 'Storage Charges', ['Storage Fee', '仓租费用小计'])
+            if storage_total > Decimal('0'):
+                total += storage_total
+                breakdown['仓租费用'] = storage_total
+                count += 1
+
+            # 解析其他费用明细工作表 (other fee)
+            other_total = self._parse_worksheet(xl, 'other fee', ['Storage Fee', '费用小计'])
+            if other_total > Decimal('0'):
+                total += other_total
+                breakdown['其他费用'] = other_total
+                count += 1
+
+            if count == 0:
+                return Decimal('0'), {}, 0
+
+            return total, breakdown, count
+
+        except Exception as e:
+            print(f"  易领解析失败 {file_path}: {e}")
+            return Decimal('0'), {}, 0
+
+    def _parse_worksheet(self, xl: pd.ExcelFile, sheet_name: str, keywords: list) -> Decimal:
+        """
+        解析单个工作表，提取费用小计。
+        """
+        try:
+            # 尝试匹配工作表名称（不区分大小写，模糊匹配）
+            matched_sheet_name = None
+            for ws_name in xl.sheet_names:
+                if sheet_name.lower() in ws_name.lower() or ws_name.lower() in sheet_name.lower():
+                    matched_sheet_name = ws_name
+                    break
+            
+            # 如果没找到匹配的工作表，尝试使用关键词匹配
+            if matched_sheet_name is None:
+                for ws_name in xl.sheet_names:
+                    for keyword in ['inbound', 'outbound', 'storage', 'other']:
+                        if keyword in ws_name.lower():
+                            if (keyword == 'inbound' and sheet_name == 'inbound fee') or \
+                               (keyword == 'outbound' and sheet_name == 'outbound fee') or \
+                               (keyword == 'storage' and sheet_name == 'Storage Charges') or \
+                               (keyword == 'other' and sheet_name == 'other fee'):
+                                matched_sheet_name = ws_name
+                                break
+                    if matched_sheet_name:
+                        break
+
+            if matched_sheet_name is None:
+                return Decimal('0')
+
+            df = pd.read_excel(xl, sheet_name=matched_sheet_name)
+            if df.empty:
+                return Decimal('0')
+
+            # 寻找费用小计列
+            amount_col = None
+            for kw in keywords:
+                for c in df.columns:
+                    if kw in str(c):
+                        amount_col = c
+                        break
+                if amount_col is not None:
+                    break
+
+            if amount_col is None:
+                return Decimal('0')
+
+            # 计算总金额
+            subtotal = Decimal('0')
+            for _, row in df.iterrows():
+                val = row.get(amount_col, 0)
+                if pd.isna(val):
+                    continue
+                try:
+                    amt = Decimal(str(val))
+                    subtotal += amt
+                except Exception:
+                    continue
+
+            return subtotal
+
+        except Exception:
+            return Decimal('0')
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从易领仓库文件名中提取月份信息。
+        支持格式：
+        - OperatingCosts_20251231115544.xlsx
+        """
+        import re
+        
+        # 格式: OperatingCosts_20251231115544.xlsx
+        match = re.search(r'OperatingCosts_(\d{8})\d+\.xlsx', filename)
+        if match:
+            date_str = match.group(1)
+            year = date_str[:4]
+            month = date_str[4:6]
+            return f"{year}-{month}"
+            
+        return ""
+
+
 def get_parser(warehouse_name: str) -> BaseWarehouseParser:
     """获取仓库解析器"""
     parsers = {
@@ -1261,6 +1931,13 @@ def get_parser(warehouse_name: str) -> BaseWarehouseParser:
         '奥韵汇': AoyunhuiParser(),
         '东方嘉盛': DongFangParser(),
         'G7': G7Parser(),  # 添加G7解析器
+        '久喜': JiuXiParser(),  # 添加久喜解析器
+        '津达': JinDaParser(),  # 添加津达解析器
+        '酷麓': KuLuParser(),  # 添加酷麓解析器
+        '西邮': XiYouParser(),  # 添加西邮解析器
+        'TLB账单': TLBParser(),  # 添加TLB账单解析器
+        '易达云': YiDaYunParser(),  # 添加易达云解析器
+        '易领': YiLingParser(),  # 添加易领解析器
     }
     return parsers.get(warehouse_name)
 

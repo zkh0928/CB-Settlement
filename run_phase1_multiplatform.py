@@ -40,9 +40,9 @@ def run_phase1_multiplatform():
     
     # 1. 扫描文件
     scanner = MultiPlatformScanner([
-        r'D:\app\收入核算系统\data\部分店铺收入\亚马逊',
-        r'D:\app\收入核算系统\data\部分店铺收入\多平台',
-        r'D:\app\收入核算系统\data\部分店铺收入\速卖通',
+        r'C:\Users\EDY\Desktop\CB-Settlement\data\部分店铺收入\亚马逊',
+        r'C:\Users\EDY\Desktop\CB-Settlement\data\部分店铺收入\多平台',
+        r'C:\Users\EDY\Desktop\CB-Settlement\data\部分店铺收入\速卖通',
     ])
     
     platform_files = scanner.scan()
@@ -146,7 +146,7 @@ def run_phase1_multiplatform():
             print(f"{row['platform']:15s} | {row['net_settlement']:>15,.2f} {row['currency']:3s} | {int(row['total_records']):>6d} 条")
         
         # 输出 Excel
-        output_path = r'd:\app\收入核算系统\output\月度核算报表_Phase1_多平台.xlsx'
+        output_path = r'C:\Users\EDY\Desktop\CB-Settlement\output\月度核算报表_Phase1_多平台.xlsx'
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         
         # 详细数据
@@ -163,7 +163,7 @@ def run_phase1_multiplatform():
                 summary.to_excel(writer, sheet_name='平台汇总', index=False)
             final_path = output_path
         except PermissionError:
-            backup_path = r'd:\app\收入核算系统\output\月度核算报表_Phase1_多平台_auto.xlsx'
+            backup_path = r'C:\Users\EDY\Desktop\CB-Settlement\output\月度核算报表_Phase1_多平台_auto.xlsx'
             with pd.ExcelWriter(backup_path, engine='xlsxwriter') as writer:
                 df_output.to_excel(writer, sheet_name='详细数据', index=False)
                 summary.to_excel(writer, sheet_name='平台汇总', index=False)
