@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Phase 2: 平台收入 × 仓库履约成本
 
@@ -24,6 +24,45 @@ from src.parser.warehouse_parser import aggregate_warehouse_costs, WarehouseMont
 warnings.filterwarnings('ignore')
 
 
+WAREHOUSE_REGION_MAP = {
+    'TSP': 'UK',
+    '1510': 'UK',
+    '京东': 'Global',
+    '海洋': 'UK',
+    'LHZ': 'DE',
+    '奥韵汇': 'DE',
+    '东方嘉盛': 'CN',
+    'G7': 'DE',
+    '久喜': 'DE',
+    '津达': 'DE',
+    '酷麓': 'US',
+    '西邮': 'US',
+    'TLB账单': 'UK',
+    '易达云': 'US',
+    '易领': 'US',
+    'AUS_FDM': 'AU',
+    '澳洲FDM': 'AU',
+    '澳洲ADM': 'AU',
+    'sphere freight': 'AU',
+    'Sphere Freight': 'AU',
+    '中转仓': 'AU',
+}
+
+
+def get_warehouse_region(warehouse_name: str) -> str:
+    """Resolve warehouse region with simple alias fallback."""
+    name = (warehouse_name or '').strip()
+    if name in WAREHOUSE_REGION_MAP:
+        return WAREHOUSE_REGION_MAP[name]
+
+    # Fallback for slight naming variants.
+    upper_name = name.upper()
+    if upper_name in WAREHOUSE_REGION_MAP:
+        return WAREHOUSE_REGION_MAP[upper_name]
+
+    return '-'
+
+
 def run_phase2():
     """Phase 2 主入口"""
     print("=" * 70)
@@ -34,6 +73,7 @@ def run_phase2():
     # 路径配置
     platform_data_path = Path(r'C:\Users\EDY\Desktop\CB-Settlement\data\部分店铺收入')
     warehouse_data_path = Path(r'C:\Users\EDY\Desktop\CB-Settlement\data\仓库财务账单\海外仓账单')
+    au_warehouse_data_path = Path(r'C:\Users\EDY\Desktop\CB-Settlement\data\仓库财务账单\澳洲')
     output_path = Path(r'C:\Users\EDY\Desktop\CB-Settlement\output')
 
     # === 1. 平台收入汇总 (沿用 Phase 1 结果) ===
@@ -69,6 +109,7 @@ def run_phase2():
     
     warehouses = ['TSP', '1510', '京东', '海洋', 'LHZ', '奥韵汇', '东方嘉盛', 'G7', '久喜', '津达', '酷麓', '西邮', 'TLB账单', '易达云', '易领']
     warehouse_costs = aggregate_warehouse_costs(str(warehouse_data_path), warehouses)
+    warehouse_costs.extend(aggregate_warehouse_costs(str(au_warehouse_data_path), ['AUS_FDM', 'sphere freight']))
     
     print(f"  共解析 {len(warehouse_costs)} 条仓库月度记录")
     
@@ -101,7 +142,7 @@ def run_phase2():
                 warehouse_rows.append({
                     '月份': c.year_month,
                     '仓库': c.warehouse_name,
-                    '区域': {'TSP': 'UK', '1510': 'UK', '京东': 'Global', '海洋': 'UK', 'LHZ': 'DE', '奥韵汇': 'DE', '东方嘉盛': 'CN', 'G7': 'DE', '久喜': 'DE', '津达': 'DE', '酷麓': 'US', '西邮': 'US', 'TLB账单': 'UK', '易达云': 'US', '易领': 'US'}.get(c.warehouse_name, '-'),
+                    '区域': get_warehouse_region(c.warehouse_name),
                     '履约成本合计': float(c.total_cost),
                     '币种': c.currency,
                     '记录数': c.record_count,

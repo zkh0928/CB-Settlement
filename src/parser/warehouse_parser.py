@@ -53,6 +53,10 @@ class BaseWarehouseParser:
         """从文件名提取月份"""
         raise NotImplementedError
 
+    def get_warehouse_name_for_file(self, file_path: str) -> str:
+        """按文件决定落表仓库名，默认使用解析器仓库名。"""
+        return self.warehouse_name
+
 
 class G7Parser(BaseWarehouseParser):
     """G7仓库解析器 (德国EUR)"""
@@ -1100,6 +1104,363 @@ class AoyunhuiParser(BaseWarehouseParser):
             return  f"{match.group(1)}-{match.group(2)}" 
         return  ""
 
+
+
+class AustraliaFDMParser(BaseWarehouseParser):
+    """Australia FDM parser (AU, AUD)
+
+    ?????
+    - ??????? INV ??? PDF ???
+    - ? PDF ????? `TOTAL AMT.` ???
+    - ???????????????????????
+    """
+
+    def __init__(self):
+        super().__init__("澳洲FDM", "AU", "AUD")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        filename = os.path.basename(file_path)
+        if not self._is_inv_pdf(filename):
+            return Decimal('0'), {}, 0
+
+        total = self._extract_total_amt_from_pdf(file_path)
+        if total is None:
+            return Decimal('0'), {}, 0
+
+        return total, {'TOTAL AMT.': total}, 1
+
+    def parse_file_by_month(self, file_path: str) -> Dict[str, Tuple[Decimal, Dict[str, Decimal], int]]:
+        filename = os.path.basename(file_path)
+        if not self._is_inv_pdf(filename):
+            return {}
+
+        ym = self.extract_month(file_path)
+        if not ym:
+            return {}
+
+        total = self._extract_total_amt_from_pdf(file_path)
+        if total is None:
+            return {}
+
+        return {ym: (total, {'TOTAL AMT.': total}, 1)}
+
+    def extract_month(self, file_path: str) -> str:
+        filename = os.path.basename(file_path)
+        base = os.path.splitext(filename)[0].replace('\xa0', ' ')
+        compact = re.sub(r'\s+', '', base)
+        month = None
+        year = None
+
+        # ??? PDF ? Date ????????
+        inv_date = self._extract_invoice_date_from_pdf(file_path)
+        if inv_date is not None:
+            year = inv_date.year
+            month = inv_date.month
+
+        # ?? 0630-0706 / 0901-0907 / INV000271840901-0907 ???
+        range_matches = re.findall(r'(\d{2})(\d{2})\s*[-_~?]\s*(\d{2})(\d{2})', compact)
+        if month is None and range_matches:
+            end_mm = int(range_matches[-1][2])
+            if 1 <= end_mm <= 12:
+                month = end_mm
+
+        # ????????? 0928 ??????
+        if month is None:
+            tail_day = re.search(r'(\d{2})(\d{2})(?!\d)', compact)
+            if tail_day:
+                mm = int(tail_day.group(1))
+                if 1 <= mm <= 12:
+                    month = mm
+
+        # ??????????????????
+        if month is None:
+            try:
+                ts = datetime.fromtimestamp(os.path.getmtime(file_path))
+                month = ts.month
+            except Exception:
+                return ""
+
+        # ??????? Date ??????????????
+        if year is None:
+            try:
+                year = datetime.fromtimestamp(os.path.getmtime(file_path)).year
+            except Exception:
+                year = datetime.now().year
+
+        return f"{year}-{month:02d}"
+
+    def _is_inv_pdf(self, filename: str) -> bool:
+        normalized = (filename or "").replace('\xa0', ' ').strip()
+        stem = os.path.splitext(normalized)[0]
+        return normalized.lower().endswith('.pdf') and stem.upper().startswith('INV')
+
+    def _extract_total_amt_from_pdf(self, file_path: str):
+        if not PDF_AVAILABLE:
+            return None
+
+        amount = self._extract_total_amt_with_pdfplumber(file_path)
+        if amount is not None:
+            return amount
+
+        return self._extract_total_amt_with_pypdf2(file_path)
+
+    def _extract_total_amt_with_pdfplumber(self, file_path: str):
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    amount = self._extract_total_amt_from_text(text)
+                    if amount is not None:
+                        return amount
+        except Exception:
+            return None
+        return None
+
+    def _extract_total_amt_with_pypdf2(self, file_path: str):
+        try:
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                for page in reader.pages:
+                    text = page.extract_text() or ""
+                    amount = self._extract_total_amt_from_text(text)
+                    if amount is not None:
+                        return amount
+        except Exception:
+            return None
+        return None
+
+    def _extract_total_amt_from_text(self, text: str):
+        if not text:
+            return None
+
+        normalized = text.replace('\xa0', ' ')
+        amount_pattern = r'([()\-]?\s*(?:AUD|USD|EUR|GBP|\$)?\s*[\d,]+(?:\.\d{1,2})?\s*\)?)'
+
+        # 场景1：TOTAL AMT 与金额同一行
+        m = re.search(rf'TOTAL\s*AMT\.?\s*[:：]?\s*{amount_pattern}', normalized, re.IGNORECASE)
+        if m:
+            parsed = self._parse_amount_token(m.group(1))
+            if parsed is not None:
+                return parsed
+
+        # 场景2：TOTAL AMT 在一行，金额在下一行
+        lines = normalized.splitlines()
+        for i, line in enumerate(lines):
+            if re.search(r'TOTAL\s*AMT\.?', line, re.IGNORECASE):
+                for j in range(i, min(i + 3, len(lines))):
+                    mm = re.search(amount_pattern, lines[j], re.IGNORECASE)
+                    if mm:
+                        parsed = self._parse_amount_token(mm.group(1))
+                        if parsed is not None:
+                            return parsed
+
+        return None
+
+    def _parse_amount_token(self, token: str):
+        raw = (token or "").strip().replace(' ', '')
+        raw = re.sub(r'^(AUD|USD|EUR|GBP|\$)', '', raw, flags=re.IGNORECASE)
+        raw = raw.replace(',', '')
+        negative = False
+        if raw.startswith('(') and raw.endswith(')'):
+            raw = raw[1:-1]
+            negative = True
+        if raw.startswith('-'):
+            raw = raw[1:]
+            negative = True
+        try:
+            val = Decimal(raw)
+            return -val if negative else val
+        except Exception:
+            return None
+
+
+    def _extract_invoice_date_from_pdf(self, file_path: str):
+        if not PDF_AVAILABLE:
+            return None
+
+        if pdfplumber is not None:
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages[:2]:
+                        text = page.extract_text() or ""
+                        dt = self._extract_date_from_text(text)
+                        if dt is not None:
+                            return dt
+            except Exception:
+                pass
+
+        if PyPDF2 is not None:
+            try:
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages[:2]:
+                        text = page.extract_text() or ""
+                        dt = self._extract_date_from_text(text)
+                        if dt is not None:
+                            return dt
+            except Exception:
+                pass
+
+        return None
+
+    def _extract_date_from_text(self, text: str):
+        if not text:
+            return None
+
+        normalized = text.replace('\xa0', ' ')
+        m = re.search(
+            r'(?:Invoice\s*Date|Date)\s*[:?]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})',
+            normalized,
+            re.IGNORECASE,
+        )
+        if not m:
+            return None
+
+        raw = m.group(1).strip().replace('-', '/')
+        for fmt in ("%d/%m/%Y", "%d/%m/%y", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except Exception:
+                continue
+        return None
+
+
+class SphereFreightParser(BaseWarehouseParser):
+    """Sphere Freight parser (AU, USD)
+
+    结算口径：
+    - 解析 PDF 中的 `Date:` 与 `TOTAL:` 字段
+    - 按 Date 所属月份归集
+    """
+
+    def __init__(self):
+        super().__init__("sphere freight", "AU", "USD")
+
+    def get_warehouse_name_for_file(self, file_path: str) -> str:
+        safe_path = (file_path or "").replace('\xa0', ' ')
+        if '中转仓' in safe_path:
+            return '中转仓'
+        return self.warehouse_name
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        inv_date, total = self._extract_invoice_fields_from_pdf(file_path)
+        if total is None:
+            return Decimal('0'), {}, 0
+        return total, {'TOTAL': total}, 1
+
+    def parse_file_by_month(self, file_path: str) -> Dict[str, Tuple[Decimal, Dict[str, Decimal], int]]:
+        inv_date, total = self._extract_invoice_fields_from_pdf(file_path)
+        if total is None:
+            return {}
+
+        if inv_date is not None:
+            ym = f"{inv_date.year}-{inv_date.month:02d}"
+        else:
+            ym = self.extract_month(file_path)
+        if not ym:
+            return {}
+
+        return {ym: (total, {'TOTAL': total}, 1)}
+
+    def extract_month(self, file_path: str) -> str:
+        inv_date, _ = self._extract_invoice_fields_from_pdf(file_path)
+        if inv_date is not None:
+            return f"{inv_date.year}-{inv_date.month:02d}"
+
+        folder_name = os.path.basename(os.path.dirname(file_path))
+        match = re.search(r'(\d{1,2})月', folder_name)
+        if match:
+            mm = int(match.group(1))
+            if 1 <= mm <= 12:
+                try:
+                    yy = datetime.fromtimestamp(os.path.getmtime(file_path)).year
+                except Exception:
+                    yy = datetime.now().year
+                return f"{yy}-{mm:02d}"
+
+        try:
+            ts = datetime.fromtimestamp(os.path.getmtime(file_path))
+            return f"{ts.year}-{ts.month:02d}"
+        except Exception:
+            return ""
+
+    def _extract_invoice_fields_from_pdf(self, file_path: str):
+        if not PDF_AVAILABLE:
+            return None, None
+
+        if pdfplumber is not None:
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages[:2]:
+                        text = page.extract_text() or ""
+                        inv_date, total = self._extract_invoice_fields_from_text(text)
+                        if total is not None:
+                            return inv_date, total
+            except Exception:
+                pass
+
+        if PyPDF2 is not None:
+            try:
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages[:2]:
+                        text = page.extract_text() or ""
+                        inv_date, total = self._extract_invoice_fields_from_text(text)
+                        if total is not None:
+                            return inv_date, total
+            except Exception:
+                pass
+
+        return None, None
+
+    def _extract_invoice_fields_from_text(self, text: str):
+        if not text:
+            return None, None
+
+        normalized = text.replace('\xa0', ' ')
+
+        inv_date = None
+        date_match = re.search(
+            r'\bDate\s*:\s*([^\n\r]+?)(?:\s+Due:|\s+Page:|\s+INVOICE:|$)',
+            normalized,
+            re.IGNORECASE,
+        )
+        if date_match:
+            raw_date = date_match.group(1).strip()
+            for fmt in ("%d %b %y", "%d %b %Y", "%d %B %y", "%d %B %Y", "%d/%m/%y", "%d/%m/%Y", "%Y-%m-%d"):
+                try:
+                    inv_date = datetime.strptime(raw_date, fmt)
+                    break
+                except Exception:
+                    continue
+
+        total = None
+        total_match = re.search(
+            r'\bTOTAL\s*:\s*(?:AUD|USD|EUR|GBP|\$)?\s*([()\-]?\s*[\d,]+(?:\.\d{1,2})?\s*\)?)',
+            normalized,
+            re.IGNORECASE,
+        )
+        if total_match:
+            total = self._parse_amount_token(total_match.group(1))
+
+        return inv_date, total
+
+    def _parse_amount_token(self, token: str):
+        raw = (token or "").strip().replace(' ', '')
+        raw = raw.replace(',', '')
+        negative = False
+        if raw.startswith('(') and raw.endswith(')'):
+            raw = raw[1:-1]
+            negative = True
+        if raw.startswith('-'):
+            raw = raw[1:]
+            negative = True
+        try:
+            value = Decimal(raw)
+            return -value if negative else value
+        except Exception:
+            return None
+
 class DongFangParser(BaseWarehouseParser):
     """东方嘉盛仓库解析器 (CN, CNY)
 
@@ -1920,6 +2281,148 @@ class YiLingParser(BaseWarehouseParser):
         return ""
 
 
+class MICParser(BaseWarehouseParser):
+    """MIC德国仓解析器 (DE, EUR)
+
+    结算口径：解析账单日期和账单金额列。
+    """
+
+    def __init__(self):
+        super().__init__("mic", "DE", "EUR")
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        """
+        解析MIC德国仓账单文件，提取账单日期和账单金额列。
+        """
+        rows = self._extract_bill_rows(file_path)
+        if not rows:
+            return Decimal('0'), {}, 0
+        total = sum((amt for _, amt, _ in rows), Decimal('0'))
+        return total, {'账单金额': total}, len(rows)
+
+    def parse_file_by_month(self, file_path: str) -> Dict[str, Tuple[Decimal, Dict[str, Decimal], int]]:
+        """按“账单日期”拆分月份，返回每月账单金额。"""
+        from collections import defaultdict
+
+        monthly: Dict[str, Tuple[Decimal, Dict[str, Decimal], int]] = {}
+        rows = self._extract_bill_rows(file_path)
+        if not rows:
+            return monthly
+
+        bucket = defaultdict(lambda: {'total': Decimal('0'), 'count': 0})
+        for bill_date, amount, year in rows:
+            m = re.search(r'(\d{1,2})\s*月', str(bill_date))
+            if not m:
+                continue
+            ym = f"{year}-{m.group(1).zfill(2)}"
+            bucket[ym]['total'] += amount
+            bucket[ym]['count'] += 1
+
+        for ym, item in bucket.items():
+            total = item['total']
+            cnt = item['count']
+            monthly[ym] = (total, {'账单金额': total}, cnt)
+
+        return monthly
+
+    def _extract_bill_rows(self, file_path: str) -> List[Tuple[str, Decimal, int]]:
+        """提取 (账单日期, 账单金额, 年份) 行。"""
+        try:
+            xl = pd.ExcelFile(file_path)
+            if not xl.sheet_names:
+                return []
+
+            target_sheet = None
+            for sn in xl.sheet_names:
+                if '应收汇总' in str(sn):
+                    target_sheet = sn
+                    break
+            sheet_name = target_sheet or xl.sheet_names[0]
+
+            raw = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+            if raw.empty:
+                return []
+
+            sheet_year = 2025
+            m_year = re.search(r'(\d{4})\s*年', str(sheet_name))
+            if m_year:
+                sheet_year = int(m_year.group(1))
+
+            header_idx = None
+            for i, row in raw.iterrows():
+                vals = [str(v).strip() for v in row.tolist() if pd.notna(v)]
+                has_date = any('账单日期' in v for v in vals)
+                has_amount = any('账单金额' in v for v in vals)
+                if has_date and has_amount:
+                    header_idx = i
+                    break
+
+            if header_idx is None:
+                return []
+
+            header = [str(v).strip() if pd.notna(v) else '' for v in raw.iloc[header_idx].tolist()]
+            df = raw.iloc[header_idx + 1:].copy()
+            df.columns = header
+            if df.empty:
+                return []
+
+            date_col = None
+            amount_col = None
+            for c in df.columns:
+                if date_col is None and '账单日期' in str(c):
+                    date_col = c
+                if amount_col is None and '账单金额' in str(c):
+                    amount_col = c
+            if date_col is None or amount_col is None:
+                return []
+
+            rows: List[Tuple[str, Decimal, int]] = []
+            for _, row in df.iterrows():
+                bill_date = row.get(date_col)
+                if pd.isna(bill_date) or str(bill_date).strip() == '':
+                    continue
+
+                val = row.get(amount_col)
+                if pd.isna(val):
+                    continue
+
+                try:
+                    sval = str(val).strip()
+                    sval = sval.replace(',', '').replace('€', '').replace('EUR', '').replace(' ', '').replace('−', '-')
+                    if not sval:
+                        continue
+                    amt = Decimal(sval)
+                    rows.append((str(bill_date).strip(), amt, sheet_year))
+                except Exception:
+                    continue
+
+            return rows
+        except Exception as e:
+            print(f"  MIC解析失败 {file_path}: {e}")
+            return []
+
+    def extract_month(self, filename: str) -> str:
+        """
+        从MIC德国仓文件名中提取月份信息。
+        支持格式：
+        - MIC德国仓to EXHUPPER TEK（12月）对账单.xlsx
+        - MIC德国仓to HUPPER TEK（11月）对账单(1).xlsx
+        - MIC德国仓toHUPPER TEK8月对账单.xlsx
+        - MIC德国仓toYCD-EXHUPPER TEK对账单（9月份对账单此份为准）.xlsx
+        - MIC德国仓toYCD-EXHUPPER TEK（10月）对账单(1).xlsx
+        """
+        import re
+        
+        # 匹配中文月份
+        match = re.search(r'(\d+)月', filename)
+        if match:
+            month = match.group(1).zfill(2)
+            # 假设年份为当前年份
+            return f"2025-{month}"
+            
+        return ""
+
+
 def get_parser(warehouse_name: str) -> BaseWarehouseParser:
     """获取仓库解析器"""
     parsers = {
@@ -1938,6 +2441,11 @@ def get_parser(warehouse_name: str) -> BaseWarehouseParser:
         'TLB账单': TLBParser(),  # 添加TLB账单解析器
         '易达云': YiDaYunParser(),  # 添加易达云解析器
         '易领': YiLingParser(),  # 添加易领解析器
+        'mic': MICParser(),  # 添加MIC德国仓解析器
+        'AUS_FDM': AustraliaFDMParser(),  # 澳洲FDM解析器
+        '澳洲FDM': AustraliaFDMParser(),  # 兼容中文名称
+        'sphere freight': SphereFreightParser(),  # sphere freight PDF解析器
+        'Sphere Freight': SphereFreightParser(),  # 别名
     }
     return parsers.get(warehouse_name)
 
@@ -1948,7 +2456,7 @@ def scan_warehouse_files(base_path: str, warehouse_name: str) -> List[str]:
     files = []
     
     # 定义哪些仓库需要扫描PDF文件
-    warehouses_needing_pdf = ['海洋', 'G7']  # 海洋仓库需要处理运费PDF文件，G7仓库需要处理账单PDF文件
+    warehouses_needing_pdf = ['海洋', 'G7', 'AUS_FDM', '澳洲FDM', 'sphere freight', 'Sphere Freight']  # 海洋/G7/澳洲FDM/sphere freight需要处理PDF文件
     
     # 某些 Windows 环境下中文目录名在不同编码/终端里可能出现乱码，导致直接拼接路径找不到。
     # 这里为个别仓库提供兜底扫描策略（按文件名特征）。
@@ -1970,6 +2478,25 @@ def scan_warehouse_files(base_path: str, warehouse_name: str) -> List[str]:
                         continue
                     if f.lower().endswith('.pdf') and ('invoice' in f.lower() or 'credit' in f.lower() or f.startswith('702')):
                         files.append(os.path.join(root, f))
+        elif warehouse_name in ['AUS_FDM', '澳洲FDM']:
+            for root, _, filenames in os.walk(base_path):
+                if 'fdm' not in root.lower():
+                    continue
+                for f in filenames:
+                    if f.startswith('~$'):
+                        continue
+                    stem = os.path.splitext(f.replace('\xa0', ' ').strip())[0]
+                    if f.lower().endswith('.pdf') and stem.upper().startswith('INV'):
+                        files.append(os.path.join(root, f))
+        elif warehouse_name in ['sphere freight', 'Sphere Freight']:
+            for root, _, filenames in os.walk(base_path):
+                if 'sphere freight' not in root.lower():
+                    continue
+                for f in filenames:
+                    if f.startswith('~$'):
+                        continue
+                    if f.lower().endswith('.pdf'):
+                        files.append(os.path.join(root, f))
         else:
             return files
     
@@ -1979,6 +2506,15 @@ def scan_warehouse_files(base_path: str, warehouse_name: str) -> List[str]:
             if warehouse_name in warehouses_needing_pdf:
                 if warehouse_name == 'G7':
                     # G7仓库：只扫描PDF文件
+                    if f.lower().endswith('.pdf') and not f.startswith('~$'):
+                        files.append(os.path.join(root, f))
+                elif warehouse_name in ['AUS_FDM', '澳洲FDM']:
+                    # 澳洲FDM：只扫描 INV 开头 PDF
+                    stem = os.path.splitext(f.replace('\xa0', ' ').strip())[0]
+                    if f.lower().endswith('.pdf') and stem.upper().startswith('INV') and not f.startswith('~$'):
+                        files.append(os.path.join(root, f))
+                elif warehouse_name in ['sphere freight', 'Sphere Freight']:
+                    # sphere freight：扫描目录内所有PDF
                     if f.lower().endswith('.pdf') and not f.startswith('~$'):
                         files.append(os.path.join(root, f))
                 else:
@@ -2040,6 +2576,7 @@ def aggregate_warehouse_costs(base_path: str, warehouses: List[str]) -> List[War
         
         # 按月份分组
         monthly_data = {}
+        mic_latest_source = {}  # {ym: source_ym}，仅用于mic去重覆盖
         
         for fp in files:
             try:
@@ -2047,48 +2584,69 @@ def aggregate_warehouse_costs(base_path: str, warehouses: List[str]) -> List[War
                 # 优先使用解析器的“按月拆分”能力（适用于奥韵汇这类跨月文件）
                 if hasattr(parser, "parse_file_by_month"):
                     monthly_results = parser.parse_file_by_month(fp)  # type: ignore
+                    source_ym = parser.extract_month(fp)
+                    actual_warehouse_name = parser.get_warehouse_name_for_file(fp)
                     for ym, (total, breakdown, count) in monthly_results.items():
                         if not ym:
                             continue
-                        if ym not in monthly_data:
-                            monthly_data[ym] = {
+
+                        # MIC账单常见“累计到当月”结构：同一月份会在多个文件重复出现。
+                        # 规则：同月只保留来源账期更晚（例如12月文件覆盖11月/10月文件）。
+                        if wh_name == 'mic':
+                            prev_src = mic_latest_source.get(ym, "")
+                            if prev_src and source_ym and source_ym < prev_src:
+                                continue
+                            mic_latest_source[ym] = source_ym or prev_src
+
+                        key = (actual_warehouse_name, ym)
+                        if key not in monthly_data:
+                            monthly_data[key] = {
                                 'total': Decimal('0'),
                                 'breakdown': {},
                                 'count': 0,
                                 'files': []
                             }
-                        monthly_data[ym]['total'] += total
-                        monthly_data[ym]['count'] += count
-                        if filename not in monthly_data[ym]['files']:
-                            monthly_data[ym]['files'].append(filename)
-                        for k, v in breakdown.items():
-                            monthly_data[ym]['breakdown'][k] = monthly_data[ym]['breakdown'].get(k, Decimal('0')) + v
+                        if wh_name == 'mic':
+                            monthly_data[key]['total'] = total
+                            monthly_data[key]['count'] = count
+                            monthly_data[key]['files'] = [filename]
+                            monthly_data[key]['breakdown'] = dict(breakdown)
+                        else:
+                            monthly_data[key]['total'] += total
+                            monthly_data[key]['count'] += count
+                            if filename not in monthly_data[key]['files']:
+                                monthly_data[key]['files'].append(filename)
+                            for k, v in breakdown.items():
+                                monthly_data[key]['breakdown'][k] = monthly_data[key]['breakdown'].get(k, Decimal('0')) + v
                 else:
                     # 传递完整文件路径给extract_month方法，以便某些解析器（如G7、京东）可以从路径中提取月份
                     year_month = parser.extract_month(fp)  # 传入完整路径fp而非filename
                     if not year_month:
                         continue
+                    actual_warehouse_name = parser.get_warehouse_name_for_file(fp)
                     total, breakdown, count = parser.parse_file(fp)
-                    if year_month not in monthly_data:
-                        monthly_data[year_month] = {
+                    key = (actual_warehouse_name, year_month)
+                    if key not in monthly_data:
+                        monthly_data[key] = {
                             'total': Decimal('0'),
                             'breakdown': {},
                             'count': 0,
                             'files': []
                         }
-                    monthly_data[year_month]['total'] += total
-                    monthly_data[year_month]['count'] += count
-                    if filename not in monthly_data[year_month]['files']:
-                        monthly_data[year_month]['files'].append(filename)
+                    monthly_data[key]['total'] += total
+                    monthly_data[key]['count'] += count
+                    if filename not in monthly_data[key]['files']:
+                        monthly_data[key]['files'].append(filename)
                     for k, v in breakdown.items():
-                        monthly_data[year_month]['breakdown'][k] = monthly_data[year_month]['breakdown'].get(k, Decimal('0')) + v
+                        monthly_data[key]['breakdown'][k] = monthly_data[key]['breakdown'].get(k, Decimal('0')) + v
             except Exception as e:
                 print(f"  解析失败 {fp}: {e}")
         
         # 转换为结果对象
-        for ym, data in monthly_data.items():
+        for key, data in monthly_data.items():
+            actual_warehouse_name, ym = key
             results.append(WarehouseMonthlyCost(
-                warehouse_name=wh_name,
+                warehouse_name=actual_warehouse_name,
                 year_month=ym,
                 total_cost=data['total'],
                 currency=parser.currency,
