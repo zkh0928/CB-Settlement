@@ -136,10 +136,14 @@ class SheinParser:
         site = site_match.group(1).upper() if site_match else 'GLOBAL'
         
         # 提取店铺名
-        store_match = re.match(r'^(.+?)\s*已完成账单', filename)
-        if store_match:
-            store_name = store_match.group(1).strip()
-        else:
+        store_name = None
+        for marker in ['已完成账单', '账单商品维度', '账单明细']:
+            store_match = re.match(rf'^(.+?)\s*{marker}', filename)
+            if store_match:
+                store_name = store_match.group(1).strip()
+                break
+
+        if not store_name:
             store_name = filename.split('.')[0]
         
         return store_name, site

@@ -125,6 +125,16 @@ class ManagedStoreParser:
         match = re.match(r'^(.+?)\s*收支明细', filename)
         if match:
             return match.group(1).strip()
+
+        # 兼容: 天基托管 Sc594baac466445ae8f0cd0a0cabd744af.xlsx
+        match = re.match(r'^(.+?)\s+Sc[0-9a-f]+', filename, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+        match = re.match(r'^(.+?托管)', filename)
+        if match:
+            return match.group(1).strip()
+
         return filename.split('.')[0]
 
 

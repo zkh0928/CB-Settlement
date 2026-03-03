@@ -74,14 +74,14 @@ class MultiPlatformScanner:
             return 'temu', store_name, year_month
         
         # SHEIN
-        if ('已完成账单' in filename or '账单商品维度' in filename) and filename.endswith('.xlsx'):
-            store_name = self._extract_before(filename, '已完成账单')
+        if filename.endswith('.xlsx') and any(k in filename for k in ['已完成账单', '账单商品维度', '账单明细']):
+            store_name = self._extract_shein_store_name(filename)
             year_month = self._extract_month_from_folder(folder_name)
             return 'shein', store_name, year_month
         
         # 托管店铺
-        if '收支明细' in filename and filename.endswith('.xlsx'):
-            store_name = self._extract_before(filename, '收支明细')
+        if filename.endswith('.xlsx') and ('收支明细' in filename or '托管' in filename):
+            store_name = self._extract_managed_store_name(filename)
             year_month = self._extract_month_from_folder(folder_name)
             return 'managed_store', store_name, year_month
         
@@ -126,6 +126,30 @@ class MultiPlatformScanner:
         match = re.match(rf'^(.+?)\s*{marker}', filename, re.IGNORECASE)
         if match:
             return match.group(1).strip()
+        return filename.split('.')[0]
+
+    def _extract_shein_store_name(self, filename: str) -> str:
+        """提取 SHEIN 店铺名，兼容已完成账单/账单明细格式。"""
+        for marker in ['已完成账单', '账单商品维度', '账单明细']:
+            match = re.match(rf'^(.+?)\s*{marker}', filename, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return filename.split('.')[0]
+
+    def _extract_managed_store_name(self, filename: str) -> str:
+        """提取托管店铺名，兼容收支明细和 Sc 版本文件名。"""
+        match = re.match(r'^(.+?)\s*收支明细', filename, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+        match = re.match(r'^(.+?)\s+sc[0-9a-f]+', filename, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+        match = re.match(r'^(.+?托管)', filename, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
         return filename.split('.')[0]
     
     def _extract_month_from_folder(self, folder_name: str) -> str:

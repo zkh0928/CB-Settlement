@@ -101,8 +101,9 @@ def run_phase1_multiplatform():
                 
                 store_name = meta.get('store_name', pf.store_name)
                 currency = meta.get('currency', 'USD')
-                # 解析器未解析出月份时（如日期列为空），用扫描器从文件夹得到的月份
-                year_month = meta.get('year_month') or pf.year_month
+                # 月份口径统一优先采用扫描器结果（来自文件夹/文件名），
+                # 避免个别解析器误读表内日期导致跨月。
+                year_month = pf.year_month or meta.get('year_month')
                 site = meta.get('site', '')
                 
                 results.append({
