@@ -36,11 +36,14 @@ WAREHOUSE_REGION_MAP = {
     "G7": "DE",
     "久喜": "DE",
     "津达": "DE",
+    "酷麓": "US",
     "酷鹿": "US",
     "西邮": "US",
     "TLB账单": "UK",
     "易达云": "US",
     "易领": "US",
+    "mic": "DE",
+    "MIC": "DE",
     "AUS_FDM": "AU",
     "澳洲FDM": "AU",
     "澳洲ADM": "AU",
@@ -48,6 +51,7 @@ WAREHOUSE_REGION_MAP = {
     "Sphere Freight": "AU",
     "中转仓": "AU",
     "上海货盘": "CN",
+    "额外过关服务费": "Global",
 }
 
 
@@ -254,11 +258,13 @@ def run_phase2():
         "G7",
         "久喜",
         "津达",
-        "酷鹿",
+        "酷麓",
         "西邮",
         "TLB账单",
         "易达云",
         "易领",
+        "mic",
+        "额外过关服务费",
     ]
     warehouse_costs = aggregate_warehouse_costs(str(warehouse_data_path), warehouses)
     warehouse_costs.extend(aggregate_warehouse_costs(str(au_warehouse_data_path), ["AUS_FDM", "sphere freight"]))

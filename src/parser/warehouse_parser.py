@@ -57,6 +57,10 @@ class BaseWarehouseParser:
         """按文件决定落表仓库名，默认使用解析器仓库名。"""
         return self.warehouse_name
 
+    def get_currency_for_file(self, file_path: str) -> str:
+        """按文件决定币种，默认使用解析器币种。"""
+        return self.currency
+
 
 class G7Parser(BaseWarehouseParser):
     """G7仓库解析器 (德国EUR)"""
@@ -333,43 +337,68 @@ class TSPParser(BaseWarehouseParser):
     def extract_month(self, filename: str) -> str:
         # 1. Standard format: Jul25
         # 2. Full Month: November 2025 or November 25
-        # 3. Prevent matching timestamps (e.g. avoid Jan01 as 2001)
-        
+        # 3. Wk format: Dec Wk4 with trailing timestamp 07_01_2025
+        file_path = filename
+        filename = os.path.basename(filename)
+        filename_lower = filename.lower()
+
+        month_map = {
+            'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+            'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+            'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+        }
+
         # Pattern 1: MonYY (e.g. Jul25), strict year 24-29
         match = re.search(r'([a-zA-Z]{3})(2[4-9])', filename)
         if match:
             month_abbr = match.group(1).lower()
             year = '20' + match.group(2)
-            month_map = {
-                'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
-                'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
-                'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
-            }
             if month_abbr in month_map:
                 return f"{year}-{month_map[month_abbr]}"
 
-        # Pattern 2: Full Month + Year (November 2025 or November 2025... or November 25)
-        # Look for full month name followed by 202x or 2x
+        # Pattern 2: Full Month + Year (November 2025 or November 25)
         month_names = {
             'january': '01', 'february': '02', 'march': '03', 'april': '04',
             'may': '05', 'june': '06', 'july': '07', 'august': '08',
             'september': '09', 'october': '10', 'november': '11', 'december': '12'
         }
-        
-        filename_lower = filename.lower()
         for m_name, m_code in month_names.items():
             if m_name in filename_lower:
-                # Look for year after month name
-                # Matches: "november 2025", "november2025", "november 25"
                 year_match = re.search(rf'{m_name}.*?(202[4-9]|2[4-9])', filename_lower)
                 if year_match:
                     year_raw = year_match.group(1)
-                    if len(year_raw) == 4:
-                        year = year_raw
-                    else:
-                        year = '20' + year_raw
+                    year = year_raw if len(year_raw) == 4 else f"20{year_raw}"
                     return f"{year}-{m_code}"
-                    
+
+        # Pattern 3: "Dec Wk4" with optional generation timestamp
+        wk_match = re.search(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b\s*wk\s*\d+', filename_lower)
+        if wk_match:
+            mm = int(month_map[wk_match.group(1)])
+            year = None
+
+            # Prefer explicit YYYY in file name.
+            y_match = re.search(r'(20\d{2})', filename_lower)
+            if y_match:
+                year = int(y_match.group(1))
+
+            # If timestamp like 07_01_2025 exists and month token is Dec, map to previous year.
+            ts_match = re.search(r'(\d{2})[_\-](\d{2})[_\-](20\d{2})', filename_lower)
+            if ts_match:
+                ts_month = int(ts_match.group(2))
+                ts_year = int(ts_match.group(3))
+                if mm == 12 and ts_month == 1:
+                    year = ts_year - 1
+                elif year is None:
+                    year = ts_year
+
+            if year is None:
+                try:
+                    year = datetime.fromtimestamp(os.path.getmtime(file_path)).year
+                except Exception:
+                    year = datetime.now().year
+
+            return f"{year}-{mm:02d}"
+
         return ""
 
 
@@ -541,6 +570,7 @@ class HaiyangParser(BaseWarehouseParser):
     
     def __init__(self):
         super().__init__("海洋", "UK", "GBP")
+        self._currency_cache: Dict[str, str] = {}
     
     def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
         """
@@ -764,6 +794,10 @@ class HaiyangParser(BaseWarehouseParser):
                 
                 if not text:
                     return Decimal('0'), {}, 0
+
+                doc_currency = self._extract_invoice_currency_from_text(text)
+                if doc_currency:
+                    self._currency_cache[file_path] = doc_currency
                 
                 # 提取Charge Total金额
                 total_amount = self._extract_charge_total_from_text(text)
@@ -833,6 +867,39 @@ class HaiyangParser(BaseWarehouseParser):
                     continue
         
         return None
+
+    def _extract_invoice_currency_from_text(self, text: str) -> str:
+        src = str(text or "").upper().replace("\xa0", " ")
+        m = re.search(r'INVOICE\s+CURRENCY[:\s]*([A-Z]{3})', src)
+        if m:
+            return m.group(1)
+        if " GBP" in src or "£" in src:
+            return "GBP"
+        if " USD" in src or "US$" in src:
+            return "USD"
+        if " EUR" in src or "€" in src:
+            return "EUR"
+        return ""
+
+    def get_currency_for_file(self, file_path: str) -> str:
+        cached = self._currency_cache.get(file_path)
+        if cached:
+            return cached
+
+        filename = os.path.basename(file_path).lower()
+        if filename.startswith('运费') and filename.endswith('.pdf') and PDF_AVAILABLE:
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    if pdf.pages:
+                        txt = pdf.pages[0].extract_text() or ""
+                        doc_currency = self._extract_invoice_currency_from_text(txt)
+                        if doc_currency:
+                            self._currency_cache[file_path] = doc_currency
+                            return doc_currency
+            except Exception:
+                pass
+
+        return self.currency
     
     def extract_month(self, filename: str) -> str:
         """
@@ -842,8 +909,9 @@ class HaiyangParser(BaseWarehouseParser):
         3. HTCL-库存结算单-02.10.2025-移仓费.xlsx (移仓费计入对应月份)
         4. 运费文件强制计入2025年10月
                """
+        filename = os.path.basename(filename)
         filename_lower = filename.lower()
-        
+
         # 处理运费文件 - 强制归属到2025年10月
         if filename_lower.startswith('运费'):
             return "2025-10"
@@ -1190,9 +1258,7 @@ class AustraliaFDMParser(BaseWarehouseParser):
         return f"{year}-{month:02d}"
 
     def _is_inv_pdf(self, filename: str) -> bool:
-        normalized = (filename or "").replace('\xa0', ' ').strip()
-        stem = os.path.splitext(normalized)[0]
-        return normalized.lower().endswith('.pdf') and stem.upper().startswith('INV')
+        return _is_aus_inv_pdf_filename(filename)
 
     def _extract_total_amt_from_pdf(self, file_path: str):
         if not PDF_AVAILABLE:
@@ -2423,6 +2489,234 @@ class MICParser(BaseWarehouseParser):
         return ""
 
 
+class ExtraCustomsServiceParser(BaseWarehouseParser):
+    """额外过关服务费解析器 (Global, dynamic currency)"""
+
+    def __init__(self):
+        super().__init__("额外过关服务费", "Global", "USD")
+        self._currency_cache: Dict[str, str] = {}
+
+    def parse_file(self, file_path: str) -> Tuple[Decimal, Dict[str, Decimal], int]:
+        if not file_path.lower().endswith(".pdf") or not PDF_AVAILABLE:
+            return Decimal('0'), {}, 0
+
+        text = self._extract_pdf_text(file_path)
+        if not text:
+            return Decimal('0'), {}, 0
+
+        total = self._extract_total_amount(text)
+        if total is None or total == 0:
+            return Decimal('0'), {}, 0
+
+        currency = self._extract_currency(text)
+        if currency:
+            self._currency_cache[file_path] = currency
+
+        low = text.lower()
+        if total > 0 and ("credit note" in low or "refund" in low):
+            total = -total
+
+        return total, {'额外过关服务费': total}, 1
+
+    def get_currency_for_file(self, file_path: str) -> str:
+        cached = self._currency_cache.get(file_path)
+        if cached:
+            return cached
+        if file_path.lower().endswith(".pdf") and PDF_AVAILABLE:
+            text = self._extract_pdf_text(file_path)
+            currency = self._extract_currency(text)
+            if currency:
+                self._currency_cache[file_path] = currency
+                return currency
+        return self.currency
+
+    def extract_month(self, filename: str) -> str:
+        normalized = str(filename).replace("\\", "/")
+        base = os.path.basename(filename)
+
+        # 目录型月份: .../2025/11月/...
+        m = re.search(r'/(20\d{2})/(\d{1,2})月(?:/|$)', normalized)
+        if m:
+            return f"{m.group(1)}-{int(m.group(2)):02d}"
+
+        # 目录型月份（无年份）: .../11月/...
+        m = re.search(r'/(\d{1,2})月(?:/|$)', normalized)
+        if m:
+            month = int(m.group(1))
+            year = self._infer_year_from_name_or_mtime(base, filename)
+            return f"{year}-{month:02d}"
+
+        # 文件名日期: 2025-11-30 / 20251130 / 30.11.2025
+        patterns = [
+            r'(20\d{2})[-_/\.](\d{1,2})[-_/\.](\d{1,2})',
+            r'(20\d{2})(\d{2})(\d{2})',
+            r'(\d{1,2})[-_/\.](\d{1,2})[-_/\.](20\d{2})',
+        ]
+        for p in patterns:
+            m = re.search(p, base)
+            if not m:
+                continue
+            if p.startswith(r'(\d{1,2})'):
+                month = int(m.group(2))
+                year = int(m.group(3))
+            else:
+                year = int(m.group(1))
+                month = int(m.group(2))
+            if 1 <= month <= 12:
+                return f"{year}-{month:02d}"
+
+        if filename.lower().endswith(".pdf") and PDF_AVAILABLE:
+            text = self._extract_pdf_text(filename)
+            date_val = self._extract_doc_date(text)
+            if date_val is not None:
+                return f"{date_val.year}-{date_val.month:02d}"
+
+        year = self._infer_year_from_name_or_mtime(base, filename)
+        return f"{year}-01"
+
+    def _infer_year_from_name_or_mtime(self, base: str, file_path: str) -> int:
+        m = re.search(r'(20\d{2})', base)
+        if m:
+            return int(m.group(1))
+        # 兼容单号中携带两位年份（如 UK2507038 / JP250604）
+        m2 = re.search(r'(?<!\d)(\d{2})(?:0[1-9]|1[0-2])\d{2,4}(?!\d)', base)
+        if m2:
+            yy = int(m2.group(1))
+            return 2000 + yy if yy <= 79 else 1900 + yy
+        # 该目录当前业务范围为 2025，避免按文件修改时间误归到 2026。
+        return 2025
+
+    def _extract_pdf_text(self, file_path: str) -> str:
+        texts = []
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages[:3]:
+                    txt = (page.extract_text() or "").strip()
+                    if txt:
+                        texts.append(txt)
+        except Exception:
+            pass
+
+        if not texts and PyPDF2 is not None:
+            try:
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages[:3]:
+                        txt = (page.extract_text() or "").strip()
+                        if txt:
+                            texts.append(txt)
+            except Exception:
+                pass
+        return "\n".join(texts)
+
+    def _extract_total_amount(self, text: str):
+        src = str(text or "")
+        patterns = [
+            r'total\s*amount[^0-9\-]*(\(?-?(?:USD|EUR|GBP|CNY|AUD|JPY)?\s*[€£$¥￥]?\s*\d[\d,]*\.?\d*\)?)',
+            r'invoice\s*total[^0-9\-]*(\(?-?(?:USD|EUR|GBP|CNY|AUD|JPY)?\s*[€£$¥￥]?\s*\d[\d,]*\.?\d*\)?)',
+            r'amount\s*due[^0-9\-]*(\(?-?(?:USD|EUR|GBP|CNY|AUD|JPY)?\s*[€£$¥￥]?\s*\d[\d,]*\.?\d*\)?)',
+            r'balance\s*due[^0-9\-]*(\(?-?(?:USD|EUR|GBP|CNY|AUD|JPY)?\s*[€£$¥￥]?\s*\d[\d,]*\.?\d*\)?)',
+            r'grand\s*total[^0-9\-]*(\(?-?(?:USD|EUR|GBP|CNY|AUD|JPY)?\s*[€£$¥￥]?\s*\d[\d,]*\.?\d*\)?)',
+        ]
+        for p in patterns:
+            m = re.search(p, src, flags=re.IGNORECASE)
+            if not m:
+                continue
+            val = self._to_decimal(m.group(1))
+            if val is not None and val != 0:
+                return val
+
+        candidates: List[Decimal] = []
+        for line in src.splitlines():
+            low = line.lower()
+            if "total" not in low and "amount" not in low:
+                continue
+            for m in re.finditer(r'[\-]?\d[\d,]*\.\d{2}', line):
+                val = self._to_decimal(m.group(0))
+                if val is not None:
+                    candidates.append(val)
+        if candidates:
+            return candidates[-1]
+        return None
+
+    def _extract_currency(self, text: str) -> str:
+        src = str(text or "").upper().replace("\xa0", " ")
+        m = re.search(r'(?:INVOICE|DUTY/VAT|CREDIT NOTE)?\s*CURRENCY[:\s]*([A-Z]{3})', src)
+        if m:
+            return m.group(1)
+        for c in ("USD", "EUR", "GBP", "CNY", "AUD", "JPY"):
+            if re.search(rf'\b{c}\b', src):
+                return c
+        if "€" in src:
+            return "EUR"
+        if "£" in src:
+            return "GBP"
+        if "¥" in src or "￥" in src:
+            return "CNY"
+        return ""
+
+    def _extract_doc_date(self, text: str):
+        src = str(text or "")
+        patterns = [
+            r'(?:invoice|duty/vat|credit note)\s*date[:\s]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})',
+            r'(?:invoice|duty/vat|credit note)\s*date[:\s]*([0-9]{4}[/-][0-9]{1,2}[/-][0-9]{1,2})',
+            r'\b([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{4})\b',
+            r'\b([0-9]{4}[/-][0-9]{1,2}[/-][0-9]{1,2})\b',
+        ]
+        for p in patterns:
+            m = re.search(p, src, flags=re.IGNORECASE)
+            if not m:
+                continue
+            dt = self._parse_date(m.group(1))
+            if dt is not None:
+                return dt
+        return None
+
+    def _parse_date(self, raw: str):
+        if not raw:
+            return None
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except Exception:
+                continue
+        return None
+
+    def _to_decimal(self, value):
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        neg_by_paren = s.startswith("(") and s.endswith(")")
+        if neg_by_paren:
+            s = s[1:-1]
+        s = (
+            s.replace(",", "")
+            .replace("USD", "")
+            .replace("EUR", "")
+            .replace("GBP", "")
+            .replace("CNY", "")
+            .replace("AUD", "")
+            .replace("JPY", "")
+            .replace("€", "")
+            .replace("£", "")
+            .replace("$", "")
+            .replace("¥", "")
+            .replace("￥", "")
+            .strip()
+        )
+        if not re.fullmatch(r'[-+]?\d*\.?\d+', s):
+            return None
+        try:
+            d = Decimal(s)
+        except Exception:
+            return None
+        if neg_by_paren and d > 0:
+            d = -d
+        return d
+
+
 def get_parser(warehouse_name: str) -> BaseWarehouseParser:
     """获取仓库解析器"""
     parsers = {
@@ -2442,6 +2736,7 @@ def get_parser(warehouse_name: str) -> BaseWarehouseParser:
         '易达云': YiDaYunParser(),  # 添加易达云解析器
         '易领': YiLingParser(),  # 添加易领解析器
         'mic': MICParser(),  # 添加MIC德国仓解析器
+        '额外过关服务费': ExtraCustomsServiceParser(),  # 额外过关服务费解析器
         'AUS_FDM': AustraliaFDMParser(),  # 澳洲FDM解析器
         '澳洲FDM': AustraliaFDMParser(),  # 兼容中文名称
         'sphere freight': SphereFreightParser(),  # sphere freight PDF解析器
@@ -2450,13 +2745,25 @@ def get_parser(warehouse_name: str) -> BaseWarehouseParser:
     return parsers.get(warehouse_name)
 
 
+def _is_aus_inv_pdf_filename(filename: str) -> bool:
+    normalized = (filename or "").replace('\xa0', ' ').strip()
+    if not normalized.lower().endswith('.pdf'):
+        return False
+    stem = os.path.splitext(normalized)[0]
+    upper_stem = stem.upper()
+    if upper_stem.startswith('INV'):
+        return True
+    # 兼容 "1006-1012 INV00027427.pdf" 这类非前缀命名
+    return re.search(r'\bINV[-_\s]?\d', upper_stem) is not None
+
+
 def scan_warehouse_files(base_path: str, warehouse_name: str) -> List[str]:
     """扫描仓库目录下的文件，根据仓库类型决定是否包含PDF文件"""
     wh_path = os.path.join(base_path, warehouse_name)
     files = []
     
     # 定义哪些仓库需要扫描PDF文件
-    warehouses_needing_pdf = ['海洋', 'G7', 'AUS_FDM', '澳洲FDM', 'sphere freight', 'Sphere Freight']  # 海洋/G7/澳洲FDM/sphere freight需要处理PDF文件
+    warehouses_needing_pdf = ['海洋', 'G7', 'AUS_FDM', '澳洲FDM', 'sphere freight', 'Sphere Freight', '额外过关服务费']  # 海洋/G7/澳洲FDM/sphere freight/额外过关服务费需要处理PDF文件
     
     # 某些 Windows 环境下中文目录名在不同编码/终端里可能出现乱码，导致直接拼接路径找不到。
     # 这里为个别仓库提供兜底扫描策略（按文件名特征）。
@@ -2485,12 +2792,20 @@ def scan_warehouse_files(base_path: str, warehouse_name: str) -> List[str]:
                 for f in filenames:
                     if f.startswith('~$'):
                         continue
-                    stem = os.path.splitext(f.replace('\xa0', ' ').strip())[0]
-                    if f.lower().endswith('.pdf') and stem.upper().startswith('INV'):
+                    if _is_aus_inv_pdf_filename(f):
                         files.append(os.path.join(root, f))
         elif warehouse_name in ['sphere freight', 'Sphere Freight']:
             for root, _, filenames in os.walk(base_path):
                 if 'sphere freight' not in root.lower():
+                    continue
+                for f in filenames:
+                    if f.startswith('~$'):
+                        continue
+                    if f.lower().endswith('.pdf'):
+                        files.append(os.path.join(root, f))
+        elif warehouse_name == '额外过关服务费':
+            for root, _, filenames in os.walk(base_path):
+                if '额外过关服务费' not in root:
                     continue
                 for f in filenames:
                     if f.startswith('~$'):
@@ -2510,11 +2825,13 @@ def scan_warehouse_files(base_path: str, warehouse_name: str) -> List[str]:
                         files.append(os.path.join(root, f))
                 elif warehouse_name in ['AUS_FDM', '澳洲FDM']:
                     # 澳洲FDM：只扫描 INV 开头 PDF
-                    stem = os.path.splitext(f.replace('\xa0', ' ').strip())[0]
-                    if f.lower().endswith('.pdf') and stem.upper().startswith('INV') and not f.startswith('~$'):
+                    if _is_aus_inv_pdf_filename(f) and not f.startswith('~$'):
                         files.append(os.path.join(root, f))
                 elif warehouse_name in ['sphere freight', 'Sphere Freight']:
                     # sphere freight：扫描目录内所有PDF
+                    if f.lower().endswith('.pdf') and not f.startswith('~$'):
+                        files.append(os.path.join(root, f))
+                elif warehouse_name == '额外过关服务费':
                     if f.lower().endswith('.pdf') and not f.startswith('~$'):
                         files.append(os.path.join(root, f))
                 else:
@@ -2586,6 +2903,7 @@ def aggregate_warehouse_costs(base_path: str, warehouses: List[str]) -> List[War
                     monthly_results = parser.parse_file_by_month(fp)  # type: ignore
                     source_ym = parser.extract_month(fp)
                     actual_warehouse_name = parser.get_warehouse_name_for_file(fp)
+                    row_currency = parser.get_currency_for_file(fp)
                     for ym, (total, breakdown, count) in monthly_results.items():
                         if not ym:
                             continue
@@ -2598,7 +2916,7 @@ def aggregate_warehouse_costs(base_path: str, warehouses: List[str]) -> List[War
                                 continue
                             mic_latest_source[ym] = source_ym or prev_src
 
-                        key = (actual_warehouse_name, ym)
+                        key = (actual_warehouse_name, ym, row_currency)
                         if key not in monthly_data:
                             monthly_data[key] = {
                                 'total': Decimal('0'),
@@ -2625,7 +2943,8 @@ def aggregate_warehouse_costs(base_path: str, warehouses: List[str]) -> List[War
                         continue
                     actual_warehouse_name = parser.get_warehouse_name_for_file(fp)
                     total, breakdown, count = parser.parse_file(fp)
-                    key = (actual_warehouse_name, year_month)
+                    row_currency = parser.get_currency_for_file(fp)
+                    key = (actual_warehouse_name, year_month, row_currency)
                     if key not in monthly_data:
                         monthly_data[key] = {
                             'total': Decimal('0'),
@@ -2640,16 +2959,16 @@ def aggregate_warehouse_costs(base_path: str, warehouses: List[str]) -> List[War
                     for k, v in breakdown.items():
                         monthly_data[key]['breakdown'][k] = monthly_data[key]['breakdown'].get(k, Decimal('0')) + v
             except Exception as e:
-                print(f"  解析失败 {fp}: {e}")
+                print(f"  解析失败 {fp!r}: {e}")
         
         # 转换为结果对象
         for key, data in monthly_data.items():
-            actual_warehouse_name, ym = key
+            actual_warehouse_name, ym, row_currency = key
             results.append(WarehouseMonthlyCost(
                 warehouse_name=actual_warehouse_name,
                 year_month=ym,
                 total_cost=data['total'],
-                currency=parser.currency,
+                currency=row_currency,
                 cost_breakdown=data['breakdown'],
                 record_count=data['count'],
                 source_files=data['files'],
